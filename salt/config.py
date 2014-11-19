@@ -269,6 +269,13 @@ VALID_OPTS = {
     'con_cache': bool,
     'rotate_aes_key': bool,
     'cache_sreqs': bool,
+    'external_key_source': str,
+    'key_revalidation': int,
+    'puppet_certs_dir': str,
+    'puppet_ca_cert': str,
+    'puppet_crl_path': str,
+    'puppet_client_priv_key': str,
+    'puppet_client_pub_key': str,
 }
 
 # default configurations
@@ -420,6 +427,9 @@ DEFAULT_MINION_OPTS = {
     'password': None,
     'zmq_filtering': False,
     'cache_sreqs': True,
+    'external_key_source': '',
+    'puppet_client_priv_key': '',
+    'puppet_client_pub_key': '',
 }
 
 DEFAULT_MASTER_OPTS = {
@@ -596,6 +606,11 @@ DEFAULT_MASTER_OPTS = {
     'con_cache': False,
     'rotate_aes_key': True,
     'cache_sreqs': True,
+    'external_key_source': '',
+    'key_revalidation': 0,
+    'puppet_certs_dir': '',
+    'puppet_ca_cert': '',
+    'puppet_crl_path': '',
 }
 
 # ----- Salt Cloud Configuration Defaults ----------------------------------->

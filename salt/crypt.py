@@ -36,6 +36,8 @@ import salt.minion
 from salt.exceptions import (
     AuthenticationError, SaltClientError, SaltReqTimeoutError
 )
+import salt.external_keys
+import salt.puppet_keys
 
 log = logging.getLogger(__name__)
 
@@ -309,7 +311,13 @@ class Auth(object):
         else:
             self.mpub = 'minion_master.pub'
         if not os.path.isfile(self.pub_path):
-            self.get_keys()
+            if self.opts['external_key_source']:
+                handler = salt.external_keys.ExternalKeys.get_handler(self.opts)
+                if not handler.get_minion_keypair(opts, self.pub_path, self.rsa_path):
+                    # fixme put something here
+                    salt.external_keys.ExternalKeys.whine('failed to get key pair externally, exiting', fatal=True)
+            else:
+                self.get_keys()
 
     def get_keys(self):
         '''
@@ -660,6 +668,16 @@ class Auth(object):
         if 'load' in payload:
             if 'ret' in payload['load']:
                 if not payload['load']['ret']:
+                    if self.opts['external_key_source']:
+                        # get our key from external, if it's changed then we will retry with
+                        # that key, after overwriting the key we were using
+                        if (handler.get_minion_keypair(opts, self.pub_path,
+                                                       self.rsa_path, onlyifchanged=True)):
+                            log.warning('The Salt Master has rejected this minion\'s '
+                                        'public key.\nA new key pair was retrieved '
+                                        'from the configured external source.\n'
+                                        'The Salt Minion will attempt to re-authenticate.')
+                            return 'retry'
                     if self.opts['rejected_retry']:
                         log.error(
                             'The Salt Master has rejected this minion\'s public '

@@ -51,6 +51,7 @@ import binascii
 from salt.utils.master import ConnectedCache
 from salt.utils.cache import CacheCli
 from salt.ext.six.moves import range
+import salt.external_keys
 
 # Import halite libs
 try:
@@ -1524,6 +1525,17 @@ class ClearFuncs(object):
         self.masterapi = salt.daemons.masterapi.LocalFuncs(opts, key)
         self.auto_key = salt.daemons.masterapi.AutoKey(opts)
 
+        # Set up external key use if configured
+        if  self.opts['external_key_source']:
+            handler = salt.external_keys.ExternalKeys.get_handler(self.opts)
+            self.external_keys = handler(self.opts)
+            # we need this to delete an accepted minion key if the external
+            # source key has changed 
+            self.minion_keys = salt.key.KeyCLI(self.opts)
+        else:
+            self.external_keys = False
+            self.minion_keys = None
+
         # only create a con_cache-client if the con_cache is active
         if self.opts['con_cache']:
             self.cache_cli = CacheCli(self.opts)
@@ -1540,6 +1552,11 @@ class ClearFuncs(object):
         event
 
         # Verify that the key we are receiving matches the stored key
+        # If external_key_source is defined, validate key against external source,
+        # if needed (do this if the key we receive doesn't match the stored key,
+        # as well; if the external key store matches what we are sent,
+        # take that as the correct value and delete the existing copy of the
+        # key)
         # Store the key if it is not there
         # Make an RSA key with the pub key
         # Encrypt the AES key as an encrypted salt.payload
@@ -1616,22 +1633,43 @@ class ClearFuncs(object):
                     'load': {'ret': False}}
 
         elif os.path.isfile(pubfn):
+            # if key comes from an external source, revalidate
+            # it if it is stale
+            if self.opts['external_key_source']:
+                if not self.external_keys.validate(load['id'], load['pub']):
+                    key_path = pubfn_rejected
+                    # fixme reject? deny? dunno
+                    log.warning('Public key for {id} rejected, failed external revalidation'
+                             .format(**load))
+                    key_act = 'reject'
+                    key_result = False
+
             # The key has been accepted, check it
             if salt.utils.fopen(pubfn, 'r').read() != load['pub']:
-                log.error(
-                    'Authentication attempt from {id} failed, the public '
-                    'keys did not match. This may be an attempt to compromise '
-                    'the Salt cluster.'.format(**load)
-                )
-                # put denied minion key into minions_denied
-                with salt.utils.fopen(pubfn_denied, 'w+') as fp_:
-                    fp_.write(load['pub'])
-                eload = {'result': False,
-                         'id': load['id'],
-                         'pub': load['pub']}
-                self.event.fire_event(eload, tagify(prefix='auth'))
-                return {'enc': 'clear',
-                        'load': {'ret': False}}
+                # try external source, perhaps the key has changed
+                if (self.opts['external_key_source'] and 
+                        self.external_keys.validate(load['id'], load['pub'])):
+                    # delete old copy of key FIXME
+                    self.minion_keys.key.delete_key(load['id'])
+                    # this will let the new key be saved as accepted,
+                    # as though there was never a key present
+                    key_path = None
+                    
+                else:
+                    log.error(
+                        'Authentication attempt from {id} failed, the public '
+                        'keys did not match. This may be an attempt to compromise '
+                        'the Salt cluster.'.format(**load)
+                    )
+                    # put denied minion key into minions_denied
+                    with salt.utils.fopen(pubfn_denied, 'w+') as fp_:
+                        fp_.write(load['pub'])
+                    eload = {'result': False,
+                             'id': load['id'],
+                             'pub': load['pub']}
+                    self.event.fire_event(eload, tagify(prefix='auth'))
+                    return {'enc': 'clear',
+                            'load': {'ret': False}}
 
         elif not os.path.isfile(pubfn_pend):
             # The key has not been accepted, this is a new minion
@@ -1653,6 +1691,16 @@ class ClearFuncs(object):
                          .format(**load))
                 key_act = 'reject'
                 key_result = False
+            elif self.opts['external_key_source']:
+                if not self.external_keys.validate(load['id'], load['pub']):
+                    key_path = pubfn_rejected
+                    log.warning('New public key for {id} rejected, failed external validation'
+                             .format(**load))
+                    key_act = 'reject'
+                    key_result = False
+                else:
+                    # accept via logic below
+                    key_path = None
             elif not auto_sign:
                 key_path = pubfn_pend
                 log.info('New public key for {id} placed in pending'
